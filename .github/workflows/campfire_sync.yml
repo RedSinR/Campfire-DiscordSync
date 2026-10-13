@@ -1,3 +1,4 @@
+
 name: Campfire Meetup Sync
 
 on:
@@ -26,5 +27,11 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps firefox
 
-      - name: Run Campfire checker
+      - name: Read Campfire meetups
         run: python campfire_events.py
+
+      - name: Post meetups to Discord
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+        run: python discord_notify.py
