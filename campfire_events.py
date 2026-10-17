@@ -187,6 +187,7 @@ def discover_event_ids(session):
 
 
 def local_datetime(value):
+    """Convert an API timestamp to the configured local timezone."""
     if not value:
         return None
 
@@ -259,6 +260,7 @@ def read_event(session, event_id):
         "title": title or "Campfire Meetup",
         "date": format_date(start),
         "time": format_time(start, end),
+        "end_time": end.isoformat(),
         "location": event.get("address") or "Location not provided",
         "host": creator.get("displayName") or "Unknown",
         "group": club.get("name") or "Kern County Pokémon GO",
