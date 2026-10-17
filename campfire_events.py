@@ -1,6 +1,7 @@
 
 import json
 import time
+import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -50,32 +51,51 @@ query GetMeetup($id: ID!) {
 
 
 def graphql(session, query, variables):
+    """Send a GraphQL request and fail clearly on API errors."""
     response = session.post(
         API_URL,
         json={"query": query, "variables": variables},
         timeout=30,
     )
+
+    print(f"GraphQL HTTP status: {response.status_code}")
     response.raise_for_status()
 
-    result = response.json()
+    try:
+        result = response.json()
+    except ValueError as exc:
+        preview = response.text[:500]
+        raise RuntimeError(
+            f"API returned non-JSON content: {preview}"
+        ) from exc
+
     if result.get("errors"):
         raise RuntimeError(
             "Campfire GraphQL error: "
             + json.dumps(result["errors"], ensure_ascii=False)
         )
 
-    return result.get("data") or {}
+    if "data" not in result:
+        raise RuntimeError(
+            "GraphQL response contained no data field: "
+            + json.dumps(result, ensure_ascii=False)[:1000]
+        )
+
+    return result["data"] or {}
 
 
 def discover_event_ids(session):
+    """Discover map event IDs across the configured Kern County area."""
     found = set()
+    successful_requests = 0
+    failed_requests = 0
 
-    # Approximate Kern County coverage, divided into smaller map requests.
     south, north = 34.7, 35.9
     west, east = -120.1, -117.6
     tile_size = 0.25
 
     lat = south
+
     while lat < north:
         next_lat = min(lat + tile_size, north)
         lon = west
@@ -91,7 +111,10 @@ def discover_event_ids(session):
                         "ne": {"lat": next_lat, "lng": next_lon},
                     },
                     "sources": [
-                        {"name": "PGO", "dropTypes": ["EVENT", "CA_EVENT"]}
+                        {
+                            "name": "PGO",
+                            "dropTypes": ["EVENT", "CA_EVENT"],
+                        }
                     ],
                     "realityChannelId": CHANNEL_ID,
                     "limitDropCount": False,
@@ -100,29 +123,65 @@ def discover_event_ids(session):
 
             try:
                 data = graphql(session, MAP_QUERY, variables)
+
                 objects = data.get(
-                    "realityChannelMapObjectsInLatLngBounds", []
+                    "realityChannelMapObjectsInLatLngBounds"
                 )
+
+                if objects is None:
+                    raise RuntimeError(
+                        "Map query returned no expected result field. "
+                        "Response keys: " + ", ".join(data.keys())
+                    )
+
+                if not isinstance(objects, list):
+                    raise RuntimeError(
+                        "Map result was not a list: "
+                        + repr(objects)[:500]
+                    )
+
+                successful_requests += 1
 
                 for item in objects:
                     event = item.get("event") or {}
                     event_id = event.get("id")
+
                     if event_id:
                         found.add(event_id)
 
                 print(
-                    f"Scanned tile lat {lat:.2f}–{next_lat:.2f}, "
-                    f"lon {lon:.2f}–{next_lon:.2f}: "
+                    f"Tile lat {lat:.2f}-{next_lat:.2f}, "
+                    f"lon {lon:.2f}-{next_lon:.2f}: "
                     f"{len(objects)} map objects"
                 )
 
             except Exception as exc:
-                print(f"Tile failed at ({lat:.2f}, {lon:.2f}): {exc}")
+                failed_requests += 1
+                print(
+                    f"Tile failed at ({lat:.2f}, {lon:.2f}): "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
             lon = next_lon
             time.sleep(0.15)
 
         lat = next_lat
+
+    print(
+        f"Map scan summary: {successful_requests} successful requests, "
+        f"{failed_requests} failed requests."
+    )
+
+    if successful_requests == 0:
+        raise RuntimeError(
+            "Every map request failed. Refusing to treat this as "
+            "a valid empty event list."
+        )
+
+    if failed_requests:
+        print(
+            "WARNING: Some map requests failed. Results may be incomplete."
+        )
 
     return found
 
@@ -132,6 +191,10 @@ def local_datetime(value):
         return None
 
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
     return parsed.astimezone(LOCAL_TZ)
 
 
@@ -143,16 +206,17 @@ def format_time(start, end):
     if start.date() == end.date():
         if start.strftime("%p") == end.strftime("%p"):
             return (
-                f"{start.strftime('%I:%M').lstrip('0')}–"
+                f"{start.strftime('%I:%M').lstrip('0')}-"
                 f"{end.strftime('%I:%M %p').lstrip('0')}"
             )
+
         return (
-            f"{start.strftime('%I:%M %p').lstrip('0')}–"
+            f"{start.strftime('%I:%M %p').lstrip('0')}-"
             f"{end.strftime('%I:%M %p').lstrip('0')}"
         )
 
     return (
-        f"{start.strftime('%b %d, %I:%M %p')} – "
+        f"{start.strftime('%b %d, %I:%M %p')} - "
         f"{end.strftime('%b %d, %I:%M %p')}"
     ).replace(" 0", " ")
 
@@ -162,17 +226,16 @@ def read_event(session, event_id):
     event = data.get("event")
 
     if not event:
+        print(f"No event details returned for ID {event_id}")
         return None
 
     club = event.get("club") or {}
 
-    # Only announce meetups belonging to the target group.
     if club.get("id") != GROUP_ID:
         return None
 
     title = (event.get("name") or "").strip()
 
-    # Safety filter for the temporary test event.
     if "DUMMY-TEST" in title.upper():
         print(f"Skipping test event: {title}")
         return None
@@ -184,14 +247,16 @@ def read_event(session, event_id):
         print(f"Skipping event with missing dates: {title}")
         return None
 
-    if end <= datetime.now(timezone.utc).astimezone(LOCAL_TZ):
+    now = datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+
+    if end <= now:
         print(f"Skipping past event: {title}")
         return None
 
     creator = event.get("creator") or {}
 
     return {
-        "title": title,
+        "title": title or "Campfire Meetup",
         "date": format_date(start),
         "time": format_time(start, end),
         "location": event.get("address") or "Location not provided",
@@ -206,11 +271,18 @@ def main():
     session.headers.update({
         "Origin": "https://campfire.scopely.com",
         "Referer": "https://campfire.scopely.com/",
-        "User-Agent": "Campfire-DiscordSync/1.0",
+        "User-Agent": "Mozilla/5.0 Campfire-DiscordSync/1.0",
+        "Accept": "application/json",
     })
 
-    print("Discovering Campfire meetups across the Kern County area...")
-    event_ids = discover_event_ids(session)
+    print("Discovering Campfire meetups across Kern County...")
+
+    try:
+        event_ids = discover_event_ids(session)
+    except Exception as exc:
+        print(f"FATAL: Meetup discovery failed: {exc}")
+        sys.exit(1)
+
     print(f"Found {len(event_ids)} unique map event IDs.")
 
     events = []
@@ -224,7 +296,10 @@ def main():
                 print(f"Found group meetup: {event['title']}")
 
         except Exception as exc:
-            print(f"Could not read event {event_id}: {exc}")
+            print(
+                f"Could not read event {event_id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
         time.sleep(0.15)
 
