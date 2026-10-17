@@ -4,7 +4,7 @@ name: Campfire Meetup Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0,51 * * * *"
+    - cron: "0,30 * * * *"
 
 permissions:
   contents: write
