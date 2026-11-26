@@ -1,6 +1,5 @@
 {
   "announced": [
-    "https://campfire.scopely.com/discover/meetup/0a49d739-184a-40f7-88ca-1ec4c1084d48",
     "https://campfire.scopely.com/discover/meetup/65a61b9e-aa54-4f76-9b8d-65b40fb8b852",
     "https://campfire.scopely.com/discover/meetup/6a4bfaa7-fa80-4a71-afa6-319f60203ac8",
     "https://campfire.scopely.com/discover/meetup/8f3e353b-2c5f-44e7-bad7-d3bd1c67eecb",
@@ -8,10 +7,6 @@
     "https://campfire.scopely.com/discover/meetup/e643f340-17ec-4a10-a0b3-41a6956a6f88"
   ],
   "messages": {
-    "https://campfire.scopely.com/discover/meetup/0a49d739-184a-40f7-88ca-1ec4c1084d48": {
-      "message_id": "1574171961884680295",
-      "end_time": "2026-11-25T19:00:00-08:00"
-    },
     "https://campfire.scopely.com/discover/meetup/e643f340-17ec-4a10-a0b3-41a6956a6f88": {
       "message_id": "1574171964438749285",
       "end_time": "2026-11-27T19:00:00-08:00"
